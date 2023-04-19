@@ -6,28 +6,40 @@ import qutip
 
 
 def Gaussian(mu, sigma, x):
+    # Eq. (20)
     if np.shape(sigma) == ():
         G = 1/np.sqrt(sigma*2*np.pi)*np.exp(-0.5*(x - mu)**2/sigma)
     else:
         n = np.shape(sigma)[0]
-        G = 1/np.sqrt(det(sigma)*(2*np.pi)**n)*np.exp(-0.5*(x - mu).T@inv(sigma)@(x - mu))
+        sigma_inv = inv(sigma)
+        prefactor = 1/np.sqrt(det(sigma)*(2*np.pi)**n)
+        if len(np.shape(x)) == 1:
+            G = prefactor*np.exp(-0.5*(x - mu).T@sigma_inv@(x - mu))
+        else:
+            x_minus_mu = np.array([x[i] - mu[i] for i in range(2)])
+            G = prefactor*np.exp(-0.5*np.einsum('kij,km,mij->ij', x_minus_mu, sigma_inv, x_minus_mu))
     return G
 
 
 def Sigma_eps(eps):
+    # Eq. (21)
     return 0.5*np.tanh(eps)*np.identity(2)
 
 def mu_eps(eps, m):
+    # Eq. (21)
     return 1/np.cosh(eps)*np.sqrt(np.pi)/2*m
 
 def Sigma_p(eps, eta, G):
+    # Eq. (36)
     return 1/4*(np.tanh(eps)*(1 + eta*G) + eta*(G - 1) + 1 - eta)
 
 def mu_p(eps, eta, G, m):
+    # Eq. (37)
     return 1/np.cosh(eps)*np.sqrt(np.pi)/(2*np.sqrt(2))*(np.sqrt(eta*G)*m[0] + m[1])
 
 
 def M_set(L, m_max):
+    # Eq. (22)
     m1_list = np.arange(-m_max, m_max)
     m2_list = m1_list
     if L == 0:
@@ -52,6 +64,7 @@ def M_set(L, m_max):
 
 
 def sign_fun(k, m):
+    # Eq. (23)
     if k == 0:
         return 1
     if k == 1:
@@ -65,10 +78,12 @@ def sign_fun(k, m):
 
 
 def coef(eps, m):
+    # Eq. (24)
     return np.exp(-np.tanh(eps)*np.pi/4*np.linalg.norm(m)**2)
 
 
 def k_to_l(k1, k2):
+    # Eq. (38)
     K = [k1, k2]
     if K == [0, 0]:
         return 0, 0
@@ -101,10 +116,11 @@ def k_to_l(k1, k2):
     if K == [3, 2]:
         return 3, 2
     if K == [3, 3]:
-        return 0, 0
+        return 0, 2
 
 
 def k_to_lp(k1, k2):
+    # Eq. (40)
     K = [k1, k2]
     if K == [0, 0]:
         return 0, 0
@@ -140,20 +156,32 @@ def k_to_lp(k1, k2):
         return 2, 0
 
 def g_coef(eps, l, lp, x, eta, G, m_max):
+    # Eq. (43)
     n_set = M_set(l, m_max)
     g = 0
     for n in n_set:
         g += coef(eps, n)*sign_fun(lp, n)*Gaussian(mu_p(eps, eta, G, n), Sigma_p(eps, eta, G), x)
     return g
 
-def lambda_coef(k2, qm, pm, eps, eta, G, a, m_max):
+
+def g_product(k1, k2, qm, pm, eps, eta, G, m_max):
+    # product of the g's in Eq. (44)
+    l1, l2 = k_to_l(k1, k2)
+    l1p, l2p = k_to_lp(k1, k2)
+    g1 = g_coef(eps, l1, l1p, qm, eta, G, m_max)
+    g2 = g_coef(eps, l2, l2p, pm, eta, G, m_max)
+    return np.outer(g1, g2)
+
+
+def lambda_coef(k2, qm, pm, eps, eta, G, a_vec, m_max):
+    # Eq. (44)
     lam = 0
     for k1 in range(4):
         l1, l2 = k_to_l(k1, k2)
         l1p, l2p = k_to_lp(k1, k2)
         g1 = g_coef(eps, l1, l1p, qm, eta, G, m_max)
         g2 = g_coef(eps, l2, l2p, pm, eta, G, m_max)
-        lam += a[k1]*g1*g2
+        lam += a_vec[k1]*np.outer(g1, g2)
     return lam
 
 def hermite_functions(n_max, x):
@@ -243,7 +271,7 @@ def get_m_max(eps, exp_cutoff=23):
     return np.ceil(np.sqrt(exp_cutoff*4/np.pi*np.tanh(eps)**-1))
 
 
-def GKP_normalization(eps, k):
+def GKP_pauli_normalization(eps, k):
     m_max = get_m_max(eps)
     m_set = M_set(k, m_max)
     N = 0
@@ -255,45 +283,110 @@ def GKP_normalization(eps, k):
         N *= -1
     return abs(N)
 
-
 def db_to_eps(rdB):
     return np.arctanh(10**(-rdB/10))
 
+def normalization(eps, a_vec):
+    # Eq. (5)
+    N_pauli = [GKP_pauli_normalization(eps, k) for k in range(4)]
+    N = sum([a_vec[k]*N_pauli[k] for k in range(4)])
+    return N
+
+def GKP_bell_normalization(eps):
+    return sum([GKP_pauli_normalization(eps, k)**2 for k in [0, 1, 3]])
+
+def GKP_pauli_wigner(eps, k, q, p):
+    m_max = get_m_max(eps)
+    m_set = M_set(k, m_max)
+    W = 0
+    sigma = Sigma_eps(eps)
+    for m in m_set:
+        c = coef(eps, m)
+        if c > 1e-10:
+            s = sign_fun(k, m)
+            mu = mu_eps(eps, m)
+            W += s*c*Gaussian(mu, sigma, np.meshgrid(q, p))
+    if k == 2:
+        W *= -1
+    return W
+
+
+rdB_axis = np.linspace(0.001, 25, 25)
+
+# rdB_axis = np.linspace(10, 15, 6)
+
+eta = 0.95
+G = 1
+dx = 0.1
+x = np.arange(-40, 40, dx)
+# x, dx = np.linspace(-30, 30, 1001, retstep=True)
+a_sets = [
+    [1, 1, 0, 0],
+    [1, -1, 0, 0],
+    [1, 0, 1, 0],
+    [1, 0, -1, 0],
+    [1, 0, 0, 1],
+    [1, 0, 0, -1],
+]
+
+FC = np.zeros(len(rdB_axis))*np.nan
+for i_rdB, rdB in enumerate(rdB_axis):
+    print(rdB)
+    eps = db_to_eps(rdB)
+    m_max = get_m_max(eps)
+
+
+    N_bell = GKP_bell_normalization(eps)
+    N_pauli = [GKP_pauli_normalization(eps, i) for i in range(4)]
+    g_product_matrix = np.array([[g_product(k1, k2, x, x, eps, eta, G, m_max) for k1 in range(4)] for k2 in range(4)])
+
+    s_vecs = np.array([[1, 1, 1], [1, -1, -1], [-1, -1, 1], [-1, 1, -1]])
+
+
+    F = [np.zeros((len(x), len(x))) for i in range(4)]
+    probability_total = np.zeros((len(x), len(x)))
+    for a_vec in a_sets:
+        N = normalization(eps, a_vec)
+        lam_vec = np.einsum('abcd,a->bcd', g_product_matrix, a_vec)/(N*N_bell)
+
+        a_vec_out = [lam_vec[i]/lam_vec[0] for i in range(4)]
+        probability = np.real(np.einsum('acd,a->cd', lam_vec, N_pauli)*dx**2)
+        probability_total += probability/len(a_sets)
+        # print(np.sum(probability))
+
+        for i in range(4):
+            F_post = 0.5*(1 + np.einsum('abc,a->bc', a_vec_out[1:], s_vecs[i]*a_vec[1:]))
+            F[i] += np.real(probability)*np.real(F_post)/len(a_sets)
+
+    optimal = np.max(F/probability_total, axis=0)
+    optimal = np.nan_to_num(optimal)
+    # plt.contourf(x, x, optimal, 100, vmin=0, vmax=1, cmap='seismic')
+    # plt.colorbar()
+
+    FC[i_rdB] = np.sum(probability_total*optimal)
+    plt.semilogy(rdB_axis, 1-FC)
+    plt.ylim(1e-8, 1)
+    plt.xlim(0, 25)
+    plt.xlabel('Squeezing (dB)')
+    plt.ylabel('Fidelity')
+    plt.grid()
+    plt.show()
+
+
+# weights = np.einsum('ijk->i', lam_vec_2)*dx**2
+# print(sum([weights[i]*N_pauli[i] for i in range(4)])
 
 
 
-GKP_normalization(5, 0)
+# plt.contourf(np.real(lam_vec[0] - lam_vec_2[0]), 100, vmin=-1, vmax=1, cmap='seismic')
+# plt.colorbar()
+
+# lam_vec_2 = [np.einsum('abcd,a->bcd', g_product_matrix, a_vec)*dx**2 for a_vec in a_sets]
 
 
 
-rdB = 0.001
-eps = db_to_eps(rdB)
-N = [GKP_normalization(eps, k) for k in range(4)]
 
-
-# print(N1/N2)
-
-# print((GKP0*GKP0.dag() - GKP1*GKP1.dag()).tr())
-
-# print((GKP0*GKP1.dag() + GKP1*GKP0.dag()).tr())
-
-# print((1j*GKP0*GKP1.dag() - 1j*GKP1*GKP0.dag()).tr())
-
-
-GKP0 = GKP(500, rdB)
-GKP1 = GKP(500, rdB, L=1)
-
-N2 = [(GKP0.proj() + GKP1.proj()).tr(), (GKP0*GKP1.dag() + GKP1*GKP0.dag()).tr()]
-
-print(N[0]/N2[0])
-
-
-print(N2[0]/N2[1],N[0]/N[1])
-
-# plt.plot(abs(GKP0.full()))
-
-
-# eps = np.arctanh(10**(-rdB/10))
+# plt.contourf(x, x, np.real(lam), 100)
 
 
 # G = 1
