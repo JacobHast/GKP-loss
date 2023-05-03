@@ -2,6 +2,7 @@ import numpy as np
 from gkp_loss import *
 import matplotlib.pyplot as plt
 
+
 def GKP_pauli_wigner(eps, k, q, p):
     m_max = get_m_max(eps)
     m_set = M_set(k, m_max)
@@ -50,11 +51,11 @@ q, p = np.meshgrid(x, x)
 # N = normalization(eps, [1, 0, 0, 0])
 
 # W = GKP_pauli_wigner(eps, k, x, x)
+cutoff = 100
+gkp_paulis = [GKP_pauli_qutip(cutoff, r, k) for k in range(4)]
 
-gkp_paulis = [GKP_pauli_qutip(cutoff, squeezing_dB, k) for 
 
-
-print(2*np.pi*GKP_pauli_overlap(eps, 0, 0) / N**2)
+print(2 * np.pi * GKP_pauli_overlap(eps, 0, 0) / N**2)
 
 # plt.contourf(x, x, W)
 
